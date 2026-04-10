@@ -85,8 +85,7 @@ var MIGXGenerator = {
         var win = new Ext.Window({
             title: _('migxgenerator.title'),
             width: 960,
-            autoHeight: true,
-            maxHeight: 600,
+            height: 600,
             autoScroll: true,
             modal: true,
             closable: true,
@@ -153,6 +152,7 @@ var MIGXGenerator = {
         }
         return '<select id="mgtype-' + id + '" onchange="MIGXGenerator.onTypeChange(' + id + ')">' + opts + '</select>'
             + '<input type="text" id="mgtv-' + id + '" placeholder="TV name" class="migxgen-hidden" style="margin-top:2px" />'
+            + '<input type="text" id="mgconfigs-' + id + '" placeholder="configs" class="migxgen-hidden" style="margin-top:2px" />'
     },
     buildRendererSelect: function(id, val) {
         var opts = ''
@@ -195,6 +195,10 @@ var MIGXGenerator = {
             if (tvInput) { tvInput.value = data.inputTV || ''; tvInput.className = '' }
             if (typeSelect) typeSelect.value = '_tv_'
         }
+        if (data.configs) {
+            var cfgInput = document.getElementById('mgconfigs-' + id)
+            if (cfgInput) cfgInput.value = data.configs
+        }
         MIGXGenerator.onTypeChange(id)
         if (MIGXGenerator.win) MIGXGenerator.win.syncSize()
     },
@@ -205,12 +209,24 @@ var MIGXGenerator = {
     onTypeChange: function(id) {
         var sel = document.getElementById('mgtype-' + id)
         var tvField = document.getElementById('mgtv-' + id)
+        var configsField = document.getElementById('mgconfigs-' + id)
         if (!sel || !tvField) return
-        if (sel.value === '_tv_') {
+        var v = sel.value
+        /* Show/hide TV name field */
+        if (v === '_tv_') {
             tvField.className = ''
         } else {
             tvField.className = 'migxgen-hidden'
             tvField.value = ''
+        }
+        /* Show/hide configs field for migx/migxdb */
+        if (configsField) {
+            if (v === 'migx' || v === 'migxdb') {
+                configsField.className = ''
+            } else {
+                configsField.className = 'migxgen-hidden'
+                configsField.value = ''
+            }
         }
     },
     /* ---- Import ---- */
@@ -246,6 +262,7 @@ var MIGXGenerator = {
                 inputTV: f.inputTV || '',
                 inputOptionValues: f.inputOptionValues || '',
                 sourceFrom: f.sourceFrom || '',
+                configs: f.configs || '',
                 'default': f['default'] || '',
                 showInGrid: !!colMap[f.field],
                 sortable: col.sortable === 'true',
@@ -271,6 +288,7 @@ var MIGXGenerator = {
                 inputTV: document.getElementById('mgtv-' + id).value.trim(),
                 inputOptionValues: document.getElementById('mgopts-' + id).value.trim(),
                 sourceFrom: document.getElementById('mgsrc-' + id).value,
+                configs: (document.getElementById('mgconfigs-' + id) || {value:''}).value.trim(),
                 'default': document.getElementById('mgdef-' + id).value.trim(),
                 showInGrid: document.getElementById('mggrid-' + id).checked,
                 sortable: document.getElementById('mgsort-' + id).checked,
@@ -298,6 +316,7 @@ var MIGXGenerator = {
             }
             if (r.inputOptionValues) f.inputOptionValues = r.inputOptionValues
             if (r.sourceFrom) f.sourceFrom = r.sourceFrom
+            if (r.configs) f.configs = r.configs
             if (r['default']) f['default'] = r['default']
             fields.push(f)
         }
@@ -324,11 +343,8 @@ var MIGXGenerator = {
         var chunkLines = []
         for (var i = 0; i < rows.length; i++) {
             var r = rows[i]
-            var type = r.isTV ? '' : r.inputTVtype
-            if (type === 'image') {
+            if (r.renderer === 'this.renderImage') {
                 chunkLines.push('<img src="[[+' + r.field + ']]" alt="[[+' + r.field + ']]" />')
-            } else if (type === 'richtext') {
-                chunkLines.push('<div>[[+' + r.field + ']]</div>')
             } else {
                 chunkLines.push('[[+' + r.field + ']]')
             }
@@ -343,13 +359,26 @@ var MIGXGenerator = {
             + '  &tpl=`' + tvName + '_tpl`\n'
             + '  &docid=`[[*id]]`\n'
             + ']]'
+        /* Build Fenom foreach */
+        var fenomLines = ['{var $items = $_modx->resource.' + tvName + ' | fromJSON}']
+        fenomLines.push('{foreach $items as $item}')
+        for (var i = 0; i < rows.length; i++) {
+            var r = rows[i]
+            if (r.renderer === 'this.renderImage') {
+                fenomLines.push('  <img src="{$item.' + r.field + '}" alt="{$item.' + r.field + '}" />')
+            } else {
+                fenomLines.push('  {$item.' + r.field + '}')
+            }
+        }
+        fenomLines.push('{/foreach}')
+        var snippetFenom = fenomLines.join('\n')
         /* Show result */
-        MIGXGenerator.showResult(formtabsJSON, columnsJSON, chunk, snippet)
+        MIGXGenerator.showResult(formtabsJSON, columnsJSON, chunk, snippet, snippetFenom)
         /* Mark TV form dirty */
         var panel = Ext.getCmp('modx-panel-tv')
         if (panel) panel.markDirty()
     },
-    showResult: function(formtabs, columns, chunk, snippet) {
+    showResult: function(formtabs, columns, chunk, snippet, snippetFenom) {
         var area = document.getElementById('migxgen-result')
         if (!area) return
         area.className = 'migxgen-result-area'
@@ -359,10 +388,15 @@ var MIGXGenerator = {
             + '<textarea id="migxgen-chunk" rows="6" readonly>' + MIGXGenerator.escHtml(chunk) + '</textarea>'
             + '<button type="button" class="migxgen-copy-btn" onclick="MIGXGenerator.copyText(\'migxgen-chunk\')">' + _('migxgenerator.copy') + '</button>'
             + '</div>'
-            + '<label>' + _('migxgenerator.snippet_call') + '</label>'
+            + '<label>' + _('migxgenerator.snippet_call') + ' (MODX)</label>'
             + '<div class="migxgen-copy-wrap">'
             + '<textarea id="migxgen-snippet" rows="5" readonly>' + MIGXGenerator.escHtml(snippet) + '</textarea>'
             + '<button type="button" class="migxgen-copy-btn" onclick="MIGXGenerator.copyText(\'migxgen-snippet\')">' + _('migxgenerator.copy') + '</button>'
+            + '</div>'
+            + '<label>Fenom</label>'
+            + '<div class="migxgen-copy-wrap">'
+            + '<textarea id="migxgen-snippet-fenom" rows="5" readonly>' + MIGXGenerator.escHtml(snippetFenom) + '</textarea>'
+            + '<button type="button" class="migxgen-copy-btn" onclick="MIGXGenerator.copyText(\'migxgen-snippet-fenom\')">' + _('migxgenerator.copy') + '</button>'
             + '</div>'
         if (MIGXGenerator.win) MIGXGenerator.win.syncSize()
     },
